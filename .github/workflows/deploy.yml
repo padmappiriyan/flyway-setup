@@ -1,35 +1,47 @@
+# This workflow automates the build and deployment of the Flyway Manager Java application to AWS Lambda.
+# It uses OIDC (OpenID Connect) for secure, passwordless authentication with AWS.
+
 name: Build & Deploy Flyway Manager
 
 on:
   push:
-    branches: [main]
+    branches: [main] # Trigger the deployment whenever code is pushed to the main branch
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    # Permissions required for OIDC authentication and reading repository content
     permissions:
-      id-token: write
-      contents: read
+      id-token: write # Required to request an OIDC JWT token from GitHub
+      contents: read  # Required to checkout the source code
 
     steps:
+      # Step 1: Download the source code from your GitHub repository
       - uses: actions/checkout@v4
 
+      # Step 2: Set up a Java 21 environment using the Amazon Corretto distribution
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'corretto'
 
+      # Step 3: Compile the code and create a 'Fat JAR' containing all dependencies
+      # The -q flag keeps the logs clean by only showing errors/warnings
       - name: Build fat JAR
         run: mvn clean package -q
 
+      # Step 4: Authenticate with AWS using the OIDC Role
+      # This provides temporary, short-lived credentials for the deployment
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      # Step 5: Upload the newly built JAR file to your AWS Lambda function
+      # fileb:// tells the AWS CLI to treat the JAR as a binary file
       - name: Deploy to Lambda
         run: |
           aws lambda update-function-code \
