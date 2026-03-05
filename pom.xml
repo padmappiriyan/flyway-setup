@@ -30,13 +30,8 @@
             <artifactId>flyway-mysql</artifactId>
             <version>${flyway.version}</version>
         </dependency>
-        <dependency>
-            <groupId>org.flywaydb</groupId>
-            <artifactId>flyway-s3</artifactId>
-            <version>${flyway.version}</version>
-        </dependency>
 
-        <!-- AWS S3 -->
+        <!-- AWS S3 SDK (We will use this to manually download scripts) -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>s3</artifactId>

@@ -7,7 +7,18 @@ import org.flywaydb.core.api.output.MigrateResult;
 import org.flywaydb.core.api.output.ValidateResult;
 import org.flywaydb.core.api.output.BaselineResult;
 
+import java.io.File;
+import java.io.FileOutputStream;
+import java.nio.file.Files;
 import java.util.*;
+
+import software.amazon.awssdk.core.ResponseInputStream;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Request;
+import software.amazon.awssdk.services.s3.model.ListObjectsV2Response;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 public class FlywayExecutor {
 
@@ -22,9 +33,18 @@ public class FlywayExecutor {
         this.dbConfig = dbConfig;
         String finalLocation = (location != null && !location.isEmpty()) ? location : "classpath:db/migration";
 
+        // If location starts with s3:, we manually download the files to /tmp
+        // because flyway-s3 is a paid Teams feature.
+        if (finalLocation.startsWith("s3:")) {
+            finalLocation = downloadScriptsFromS3(finalLocation);
+        }
+
         var config = Flyway.configure()
                 .dataSource(dbConfig.getJdbcUrl(), dbConfig.getUser(), dbConfig.getPassword())
                 .locations(finalLocation);
+
+        // Ensure we allow out of order and mixed for robustness in this setup
+        config.baselineOnMigrate(true);
 
         if (baselineVersion != null && !baselineVersion.isEmpty()) {
             config.baselineVersion(baselineVersion)
@@ -32,6 +52,47 @@ public class FlywayExecutor {
         }
 
         this.flyway = config.load();
+    }
+
+    private String downloadScriptsFromS3(String s3Location) {
+        try {
+            // s3Location is like s3:bucket-name/path/to/scripts/
+            String path = s3Location.substring(3);
+            int firstSlash = path.indexOf("/");
+            String bucketName = path.substring(0, firstSlash);
+            String prefix = path.substring(firstSlash + 1);
+
+            File localDir = new File("/tmp/flyway-migrations-" + System.currentTimeMillis());
+            if (!localDir.exists())
+                localDir.mkdirs();
+
+            S3Client s3 = S3Client.create();
+            ListObjectsV2Response listResponse = s3.listObjectsV2(ListObjectsV2Request.builder()
+                    .bucket(bucketName)
+                    .prefix(prefix)
+                    .build());
+
+            for (S3Object s3Object : listResponse.contents()) {
+                if (s3Object.key().endsWith(".sql")) {
+                    String fileName = s3Object.key().substring(s3Object.key().lastIndexOf("/") + 1);
+                    File localFile = new File(localDir, fileName);
+
+                    ResponseInputStream<GetObjectResponse> s3ObjectStream = s3.getObject(GetObjectRequest.builder()
+                            .bucket(bucketName)
+                            .key(s3Object.key())
+                            .build());
+
+                    try (FileOutputStream out = new FileOutputStream(localFile)) {
+                        s3ObjectStream.transferTo(out);
+                    }
+                    System.out.println("Downloaded from S3: " + s3Object.key() + " -> " + localFile.getAbsolutePath());
+                }
+            }
+            // Return the filesystem path for Flyway
+            return "filesystem:" + localDir.getAbsolutePath();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to download migrations from S3: " + e.getMessage(), e);
+        }
     }
 
     public Map<String, Object> status() {
