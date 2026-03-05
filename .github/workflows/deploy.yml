@@ -32,8 +32,8 @@ jobs:
       - name: Build fat JAR
         run: mvn clean package -q
 
-      # Step 4: Authenticate with AWS using the OIDC Role
-      # This provides temporary, short-lived credentials for the deployment
+      # Step 4:Authenticate with AWS using the OIDC Role
+      # This provides temporary,  short-lived credentials for the deployment
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -47,7 +47,7 @@ jobs:
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://target/flyway-manager-1.0.0.jar
 
-      # Step 6: Sync SQL migration scripts to S3 (Separated storage)
+      # Step 6: Sync SQL migration scripts to S3 (Separated storage) for flyway
       - name: Sync SQL Migrations to S3
         run: |
           aws s3 sync src/main/resources/db/migration/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/scripts/ --delete
