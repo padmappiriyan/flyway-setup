@@ -50,7 +50,7 @@ jobs:
       # Step 6: Sync SQL migration scripts to S3 (Separated storage) for flyway
       - name: Sync SQL Migrations to S3
         run: |
-          aws s3 sync src/main/resources/db/migration/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/scripts/ --delete
+          aws s3 sync src/main/resources/db/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/scripts/ --delete
 
       # Step 7: Automatically trigger the migration using the S3 location
       - name: Run Migration
