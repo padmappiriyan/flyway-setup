@@ -41,9 +41,18 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
 
       # Step 5: Upload the newly built JAR file to your AWS Lambda function
-      # fileb:// tells the AWS CLI to treat the JAR as a binary file
       - name: Deploy to Lambda
         run: |
           aws lambda update-function-code \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://target/flyway-manager-1.0.0.jar
+
+      # Step 6: Automatically trigger the migration after deployment
+      - name: Run Migration
+        run: |
+          aws lambda invoke \
+            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
+            --payload '{"dbSelector": "aws-prod", "action": "migrate"}' \
+            --cli-binary-format raw-in-base64-out \
+            response.json
+          cat response.json
