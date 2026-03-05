@@ -47,12 +47,17 @@ jobs:
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://target/flyway-manager-1.0.0.jar
 
-      # Step 6: Automatically trigger the migration after deployment
+      # Step 6: Sync SQL migration scripts to S3 (Separated storage)
+      - name: Sync SQL Migrations to S3
+        run: |
+          aws s3 sync src/main/resources/db/migration/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/scripts/ --delete
+
+      # Step 7: Automatically trigger the migration using the S3 location
       - name: Run Migration
         run: |
           aws lambda invoke \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --payload '{"dbSelector": "aws-prod", "action": "migrate"}' \
+            --payload '{"dbSelector": "aws-prod", "action": "migrate", "migrationLocation": "s3:${{ secrets.S3_MIGRATION_BUCKET }}/scripts/"}' \
             --cli-binary-format raw-in-base64-out \
             response.json
           cat response.json

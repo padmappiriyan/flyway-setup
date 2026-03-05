@@ -15,21 +15,23 @@ public class FlywayExecutor {
     private final Flyway flyway;
 
     public FlywayExecutor(DbConfig dbConfig) {
-        this.dbConfig = dbConfig;
-        this.flyway = Flyway.configure()
-                .dataSource(dbConfig.getJdbcUrl(), dbConfig.getUser(), dbConfig.getPassword())
-                .locations("classpath:db/migration")
-                .load();
+        this(dbConfig, "classpath:db/migration", null);
     }
 
-    public FlywayExecutor(DbConfig dbConfig, String baselineVersion) {
+    public FlywayExecutor(DbConfig dbConfig, String location, String baselineVersion) {
         this.dbConfig = dbConfig;
-        this.flyway = Flyway.configure()
+        String finalLocation = (location != null && !location.isEmpty()) ? location : "classpath:db/migration";
+
+        var config = Flyway.configure()
                 .dataSource(dbConfig.getJdbcUrl(), dbConfig.getUser(), dbConfig.getPassword())
-                .locations("classpath:db/migration")
-                .baselineVersion(baselineVersion)
-                .baselineDescription("Baseline at version " + baselineVersion)
-                .load();
+                .locations(finalLocation);
+
+        if (baselineVersion != null && !baselineVersion.isEmpty()) {
+            config.baselineVersion(baselineVersion)
+                    .baselineDescription("Baseline at version " + baselineVersion);
+        }
+
+        this.flyway = config.load();
     }
 
     public Map<String, Object> status() {
@@ -62,9 +64,7 @@ public class FlywayExecutor {
             result.put("valid", vr.validationSuccessful);
             result.put("errorCount", vr.invalidMigrations.size());
             List<String> errors = new ArrayList<>();
-            vr.invalidMigrations.forEach(m ->
-                errors.add(m.version + " - " + m.errorDetails.errorMessage)
-            );
+            vr.invalidMigrations.forEach(m -> errors.add(m.version + " - " + m.errorDetails.errorMessage));
             result.put("errors", errors);
         } catch (Exception e) {
             result.put("valid", false);

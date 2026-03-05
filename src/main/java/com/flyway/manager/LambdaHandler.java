@@ -24,12 +24,10 @@ public class LambdaHandler implements RequestHandler<MigrationRequest, Migration
         try {
             DbConfig dbConfig = configResolver.resolve(dbSelector);
 
-            FlywayExecutor executor;
-            if (request.getBaselineVersion() != null && !request.getBaselineVersion().isEmpty()) {
-                executor = new FlywayExecutor(dbConfig, request.getBaselineVersion());
-            } else {
-                executor = new FlywayExecutor(dbConfig);
-            }
+            FlywayExecutor executor = new FlywayExecutor(
+                    dbConfig,
+                    request.getMigrationLocation(),
+                    request.getBaselineVersion());
 
             Map<String, Object> result = switch (action.toLowerCase()) {
                 case "status" -> executor.status();
@@ -39,7 +37,7 @@ public class LambdaHandler implements RequestHandler<MigrationRequest, Migration
                 case "rollback" -> executor.rollback();
                 case "repair" -> executor.repair();
                 default -> throw new IllegalArgumentException("Unknown action: " + action
-                    + ". Valid actions: status, validate, migrate, baseline, rollback, repair");
+                        + ". Valid actions: status, validate, migrate, baseline, rollback, repair");
             };
 
             long elapsed = System.currentTimeMillis() - start;
