@@ -44,15 +44,7 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      # Step 5: Update Lambda ONLY if Java/Pom changed (Optimized!)
-      - name: Deploy to Lambda
-        if: contains(steps.changed-files.outputs.all_changed_files, 'src/main/java/') || contains(steps.changed-files.outputs.all_changed_files, 'pom.xml')
-        run: |
-          aws lambda update-function-code \
-            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --zip-file fileb://target/flyway-manager-1.0.0.jar
-
-      # Step 6: Extract Version from POM
+      # Step 5: Extract Version from POM
       - name: Extract Version
         id: version
         run: |
@@ -60,19 +52,27 @@ jobs:
           echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
+      # Step 6: Update Lambda ONLY if Java/Pom changed
+      - name: Deploy to Lambda
+        if: contains(steps.changed-files.outputs.all_changed_files, 'src/main/java/') || contains(steps.changed-files.outputs.all_changed_files, 'pom.xml')
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://target/flyway-manager-${{ env.PROJECT_VERSION }}.jar
+
       # Step 7: Sync SQL migration and rollback scripts to VERSIONED path
-      # We sync the entire db/ folder to s3://<bucket>/<VERSION>/
-      # This creates s3://<bucket>/<VERSION>/migration/ and s3://<bucket>/<VERSION>/rollback/
       - name: Sync SQL Migrations and Rollbacks to S3
         run: |
           aws s3 sync src/main/resources/db/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/ --delete
 
-      # Step 8: Run Migration pointing to the NEW VERSION folder
+      # Step 8: Run Migration pointing to the NEW VERSION ROOT
+      # CRITICAL: We point to the version ROOT (e.g. s3://bucket/1.1.0/) 
+      # This allows the Java code to find both /migration and /rollback folders.
       - name: Run Migration
         run: |
           aws lambda invoke \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --payload "{\"dbSelector\": \"aws-prod\", \"action\": \"migrate\", \"migrationLocation\": \"s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/\"}" \
+            --payload "{\"dbSelector\": \"aws-prod\", \"action\": \"migrate\", \"migrationLocation\": \"s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/\"}" \
             --cli-binary-format raw-in-base64-out \
             response.json
           cat response.json

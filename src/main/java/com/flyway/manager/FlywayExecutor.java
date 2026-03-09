@@ -38,8 +38,18 @@ public class FlywayExecutor {
         // because flyway-s3 is a paid Teams feature.
         if (finalLocation.startsWith("s3:")) {
             this.localBaseDir = downloadScriptsFromS3(finalLocation);
-            // Point Flyway to the migration subfolder of the downloaded version folder
-            finalLocation = "filesystem:" + this.localBaseDir + "/migration";
+
+            // Smarter logic: If the downloaded folder contains a 'migration' subfolder, use
+            // it.
+            // Otherwise, use the base folder itself (case where prefix already includes
+            // 'migration/').
+            File migrationDir = new File(this.localBaseDir, "migration");
+            if (migrationDir.exists() && migrationDir.isDirectory()) {
+                finalLocation = "filesystem:" + migrationDir.getAbsolutePath();
+            } else {
+                finalLocation = "filesystem:" + this.localBaseDir;
+            }
+            System.out.println("Flyway will scan for migrations in: " + finalLocation);
         }
 
         FluentConfiguration config = Flyway.configure()
