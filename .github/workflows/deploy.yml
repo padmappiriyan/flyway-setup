@@ -52,17 +52,26 @@ jobs:
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://target/flyway-manager-1.0.0.jar
 
-      # Step 6: Sync SQL migration scripts (Always run this for any change)
+      # Step 6: Extract Version from POM
+      - name: Extract Version
+        id: version
+        run: |
+          VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      # Step 7: Sync SQL migration scripts to VERSIONED path
+      # We sync the migration scripts to s3://<bucket>/<VERSION>/migration/
       - name: Sync SQL Migrations to S3
         run: |
-          aws s3 sync src/main/resources/db/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/scripts/ --delete
+          aws s3 sync src/main/resources/db/migration/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/ --delete
 
-      # Step 7: Run Migration (Always run this to apply changes)
+      # Step 8: Run Migration pointing to the NEW VERSION folder
       - name: Run Migration
         run: |
           aws lambda invoke \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
-            --payload '{"dbSelector": "aws-prod", "action": "migrate", "migrationLocation": "s3:${{ secrets.S3_MIGRATION_BUCKET }}/scripts/"}' \
+            --payload "{\"dbSelector\": \"aws-prod\", \"action\": \"migrate\", \"migrationLocation\": \"s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/\"}" \
             --cli-binary-format raw-in-base64-out \
             response.json
           cat response.json

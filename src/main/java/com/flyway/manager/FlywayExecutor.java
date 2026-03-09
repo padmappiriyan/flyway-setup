@@ -3,6 +3,7 @@ package com.flyway.manager;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
 import org.flywaydb.core.api.MigrationInfoService;
+import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.flywaydb.core.api.output.MigrateResult;
 import org.flywaydb.core.api.output.ValidateResult;
 import org.flywaydb.core.api.output.BaselineResult;
@@ -39,9 +40,11 @@ public class FlywayExecutor {
             finalLocation = downloadScriptsFromS3(finalLocation);
         }
 
-        var config = Flyway.configure()
+        FluentConfiguration config = Flyway.configure()
                 .dataSource(dbConfig.getJdbcUrl(), dbConfig.getUser(), dbConfig.getPassword())
-                .locations(finalLocation);
+                .locations(finalLocation)
+                .ignoreMigrationPatterns("*:missing")
+                .outOfOrder(true);
 
         // Ensure we allow out of order and mixed for robustness in this setup
         config.baselineOnMigrate(true);
