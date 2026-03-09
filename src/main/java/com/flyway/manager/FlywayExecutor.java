@@ -61,11 +61,39 @@ public class FlywayExecutor {
 
     private String downloadScriptsFromS3(String s3Location) {
         try {
-            // s3Location is like s3:bucket-name/path/to/scripts/
-            String path = s3Location.substring(3);
-            int firstSlash = path.indexOf("/");
-            String bucketName = path.substring(0, firstSlash);
-            String prefix = path.substring(firstSlash + 1);
+            System.out.println("S3 download requested for: " + s3Location);
+            // s3Location is like s3:bucket-name/path or s3://bucket-name/path
+            String cleanLocation = s3Location;
+            if (cleanLocation.startsWith("s3://")) {
+                cleanLocation = cleanLocation.substring(5);
+            } else if (cleanLocation.startsWith("s3:")) {
+                cleanLocation = cleanLocation.substring(3);
+            }
+
+            // Now cleanLocation is bucket-name/path
+            if (cleanLocation.startsWith("/")) {
+                cleanLocation = cleanLocation.substring(1);
+            }
+
+            int firstSlash = cleanLocation.indexOf("/");
+            String bucketName;
+            String prefix;
+
+            if (firstSlash == -1) {
+                bucketName = cleanLocation;
+                prefix = "";
+            } else {
+                bucketName = cleanLocation.substring(0, firstSlash);
+                prefix = cleanLocation.substring(firstSlash + 1);
+            }
+
+            System.out.println("Parsed S3 bucket: '" + bucketName + "', prefix: '" + prefix + "'");
+
+            if (bucketName.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "S3 bucket name is empty. Please check your configuration and secrets. Location provided: "
+                                + s3Location);
+            }
 
             File localDir = new File("/tmp/flyway-migrations-" + System.currentTimeMillis());
             if (!localDir.exists())
