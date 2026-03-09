@@ -60,11 +60,12 @@ jobs:
           echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
-      # Step 7: Sync SQL migration scripts to VERSIONED path
-      # We sync the migration scripts to s3://<bucket>/<VERSION>/migration/
-      - name: Sync SQL Migrations to S3
+      # Step 7: Sync SQL migration and rollback scripts to VERSIONED path
+      # We sync the entire db/ folder to s3://<bucket>/<VERSION>/
+      # This creates s3://<bucket>/<VERSION>/migration/ and s3://<bucket>/<VERSION>/rollback/
+      - name: Sync SQL Migrations and Rollbacks to S3
         run: |
-          aws s3 sync src/main/resources/db/migration/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/ --delete
+          aws s3 sync src/main/resources/db/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/ --delete
 
       # Step 8: Run Migration pointing to the NEW VERSION folder
       - name: Run Migration

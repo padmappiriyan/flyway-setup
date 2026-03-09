@@ -10,7 +10,6 @@ import org.flywaydb.core.api.output.BaselineResult;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.nio.file.Files;
 import java.util.*;
 
 import software.amazon.awssdk.core.ResponseInputStream;
@@ -25,6 +24,7 @@ public class FlywayExecutor {
 
     private final DbConfig dbConfig;
     private final Flyway flyway;
+    private String localBaseDir;
 
     public FlywayExecutor(DbConfig dbConfig) {
         this(dbConfig, "classpath:db/migration", null);
@@ -37,7 +37,9 @@ public class FlywayExecutor {
         // If location starts with s3:, we manually download the files to /tmp
         // because flyway-s3 is a paid Teams feature.
         if (finalLocation.startsWith("s3:")) {
-            finalLocation = downloadScriptsFromS3(finalLocation);
+            this.localBaseDir = downloadScriptsFromS3(finalLocation);
+            // Point Flyway to the migration subfolder of the downloaded version folder
+            finalLocation = "filesystem:" + this.localBaseDir + "/migration";
         }
 
         FluentConfiguration config = Flyway.configure()
@@ -77,8 +79,10 @@ public class FlywayExecutor {
 
             for (S3Object s3Object : listResponse.contents()) {
                 if (s3Object.key().endsWith(".sql")) {
-                    String fileName = s3Object.key().substring(s3Object.key().lastIndexOf("/") + 1);
-                    File localFile = new File(localDir, fileName);
+                    // Preserve folder structure (migration/, rollback/)
+                    String relativePath = s3Object.key().substring(prefix.length());
+                    File localFile = new File(localDir, relativePath);
+                    localFile.getParentFile().mkdirs();
 
                     ResponseInputStream<GetObjectResponse> s3ObjectStream = s3.getObject(GetObjectRequest.builder()
                             .bucket(bucketName)
@@ -92,7 +96,7 @@ public class FlywayExecutor {
                 }
             }
             // Return the filesystem path for Flyway
-            return "filesystem:" + localDir.getAbsolutePath();
+            return localDir.getAbsolutePath();
         } catch (Exception e) {
             throw new RuntimeException("Failed to download migrations from S3: " + e.getMessage(), e);
         }
@@ -166,7 +170,9 @@ public class FlywayExecutor {
     }
 
     public Map<String, Object> rollback() {
-        RollbackExecutor rollbackExecutor = new RollbackExecutor(dbConfig, flyway);
+        // If we have a localBaseDir (from S3), pass the rollback subfolder
+        String rollbackPath = (localBaseDir != null) ? (localBaseDir + "/rollback") : null;
+        RollbackExecutor rollbackExecutor = new RollbackExecutor(dbConfig, flyway, rollbackPath);
         return rollbackExecutor.execute();
     }
 

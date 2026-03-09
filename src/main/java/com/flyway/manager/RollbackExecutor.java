@@ -4,6 +4,7 @@ import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.sql.Connection;
@@ -17,10 +18,12 @@ public class RollbackExecutor {
 
     private final DbConfig dbConfig;
     private final Flyway flyway;
+    private final String localRollbackDir;
 
-    public RollbackExecutor(DbConfig dbConfig, Flyway flyway) {
+    public RollbackExecutor(DbConfig dbConfig, Flyway flyway, String localRollbackDir) {
         this.dbConfig = dbConfig;
         this.flyway = flyway;
+        this.localRollbackDir = localRollbackDir;
     }
 
     public Map<String, Object> execute() {
@@ -50,7 +53,7 @@ public class RollbackExecutor {
 
         try (Connection conn = DriverManager.getConnection(
                 dbConfig.getJdbcUrl(), dbConfig.getUser(), dbConfig.getPassword());
-             Statement stmt = conn.createStatement()) {
+                Statement stmt = conn.createStatement()) {
 
             // Execute rollback SQL
             for (String statement : sql.split(";")) {
@@ -84,9 +87,29 @@ public class RollbackExecutor {
         return info.getDescription().toLowerCase().replace(" ", "_");
     }
 
+    private String readFile(File file) {
+        try {
+            return java.nio.file.Files.readString(file.toPath());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private String loadRollbackSql(String path) {
+        // If we have a local directory (e.g. from S3), look there first
+        if (localRollbackDir != null) {
+            // path is like "db/rollback/R1__undo.sql", we want just the filename
+            String fileName = path.substring(path.lastIndexOf("/") + 1);
+            File localFile = new File(localRollbackDir, fileName);
+            if (localFile.exists()) {
+                return readFile(localFile);
+            }
+        }
+
+        // Fallback to classpath
         try (InputStream is = getClass().getClassLoader().getResourceAsStream(path)) {
-            if (is == null) return null;
+            if (is == null)
+                return null;
             return new BufferedReader(new InputStreamReader(is))
                     .lines().collect(Collectors.joining("\n"));
         } catch (Exception e) {
@@ -99,11 +122,12 @@ public class RollbackExecutor {
         // We scan a few known patterns
         String prefix = "db/rollback/R" + version + "__";
         String[] candidates = {
-            prefix + "undo.sql",
+                prefix + "undo.sql",
         };
         for (String candidate : candidates) {
             String sql = loadRollbackSql(candidate);
-            if (sql != null) return sql;
+            if (sql != null)
+                return sql;
         }
         return null;
     }
