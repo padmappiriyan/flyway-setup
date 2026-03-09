@@ -1,82 +1,117 @@
-# This workflow automates the build and deployment of the Flyway Manager Java application to AWS Lambda.
-# It uses OIDC (OpenID Connect) for secure, passwordless authentication with AWS.
+# ============================================================
+# Flyway Manager - Build & Deploy Pipeline
+# Uses OIDC for secure, passwordless AWS authentication.
+# Implements True Delta Sync: only new version scripts go to S3.
+# ============================================================
 
 name: Build & Deploy Flyway Manager
 
 on:
   push:
-    branches: [main] # Trigger the deployment whenever code is pushed to the main branch
+    branches: [main]
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
-    # Permissions required for OIDC authentication and reading repository content
     permissions:
-      id-token: write # Required to request an OIDC JWT token from GitHub
-      contents: read  # Required to checkout the source code
+      id-token: write # Required for OIDC token
+      contents: read  # Required for repo checkout
 
     steps:
-      # Step 1: Download the source code from your GitHub repository
-      - uses: actions/checkout@v4
+      # ── Step 1: Checkout source code ──────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      # Step 2: Set up a Java 21 environment
+      # ── Step 2: Set up Java 21 ─────────────────────────────────────
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'corretto'
 
-      # NEW: Detect which files changed
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v42
-
-      # Step 3: Compile only if Java source or pom.xml changed
-      - name: Build fat JAR
-        if: contains(steps.changed-files.outputs.all_changed_files, 'src/main/java/') || contains(steps.changed-files.outputs.all_changed_files, 'pom.xml')
-        run: mvn clean package -q
-
-      # Step 4: Authenticate with AWS
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      # Step 5: Extract Version from POM
+      # ── Step 3: Extract project version from pom.xml ──────────────
+      # Done early so all steps can use $PROJECT_VERSION
       - name: Extract Version
         id: version
         run: |
           VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
           echo "PROJECT_VERSION=$VERSION" >> $GITHUB_ENV
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected project version: $VERSION"
 
-      # Step 6: Update Lambda ONLY if Java/Pom changed
-      - name: Deploy to Lambda
+      # ── Step 4: Detect changed files ───────────────────────────────
+      - name: Get Changed Files
+        id: changed-files
+        uses: tj-actions/changed-files@v42
+
+      # ── Step 5: Build fat JAR (always, to ensure JAR name matches version) ──
+      - name: Build Fat JAR
+        if: contains(steps.changed-files.outputs.all_changed_files, 'src/main/java/') || contains(steps.changed-files.outputs.all_changed_files, 'pom.xml')
+        run: mvn clean package -q -DskipTests
+
+      # ── Step 6: Authenticate with AWS via OIDC ─────────────────────
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      # ── Step 7: Update Lambda code ONLY if Java/pom changed ────────
+      - name: Deploy Lambda Code
         if: contains(steps.changed-files.outputs.all_changed_files, 'src/main/java/') || contains(steps.changed-files.outputs.all_changed_files, 'pom.xml')
         run: |
+          echo "Deploying flyway-manager-${{ env.PROJECT_VERSION }}.jar to Lambda..."
           aws lambda update-function-code \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --zip-file fileb://target/flyway-manager-${{ env.PROJECT_VERSION }}.jar
+          echo "Lambda code updated successfully."
 
-      # Step 7: True Delta Sync - Sync ONLY the scripts for the current version
-      # We sync from local versioned subfolders to S3 version prefix.
-      # This ensures s3://<bucket>/<VERSION>/migration/ and s3://<bucket>/<VERSION>/rollback/
-      # only contain THIS version's scripts.
-      - name: Sync SQL Migrations and Rollbacks to S3 (Delta Sync)
+      # ── Step 8: TRUE DELTA SYNC ─────────────────────────────────────
+      # Syncs ONLY the scripts for the current version to its S3 prefix.
+      # Local structure: db/migration/<version>/ and db/rollback/<version>/
+      # S3 result:       s3://bucket/<version>/migration/ (only new scripts)
+      #                  s3://bucket/<version>/rollback/  (only new scripts)
+      - name: Delta Sync SQL Scripts to S3
         run: |
-          aws s3 sync src/main/resources/db/migration/${{ env.PROJECT_VERSION }}/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/ --delete
-          aws s3 sync src/main/resources/db/rollback/${{ env.PROJECT_VERSION }}/ s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/rollback/ --delete
+          MIGRATION_DIR="src/main/resources/db/migration/${{ env.PROJECT_VERSION }}"
+          ROLLBACK_DIR="src/main/resources/db/rollback/${{ env.PROJECT_VERSION }}"
 
-      # Step 8: Run Migration pointing to the NEW VERSION ROOT
-      # CRITICAL: We point to the version ROOT (e.g. s3://bucket/1.1.0/) 
-      # This allows the Java code to find both /migration and /rollback folders.
+          if [ -d "$MIGRATION_DIR" ]; then
+            echo "Syncing migration scripts for version ${{ env.PROJECT_VERSION }}..."
+            aws s3 sync "$MIGRATION_DIR/" \
+              "s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/migration/" --delete
+          else
+            echo "No migration scripts found for version ${{ env.PROJECT_VERSION }}, skipping."
+          fi
+
+          if [ -d "$ROLLBACK_DIR" ]; then
+            echo "Syncing rollback scripts for version ${{ env.PROJECT_VERSION }}..."
+            aws s3 sync "$ROLLBACK_DIR/" \
+              "s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/rollback/" --delete
+          else
+            echo "No rollback scripts found for version ${{ env.PROJECT_VERSION }}, skipping."
+          fi
+
+      # ── Step 9: Execute Migration via Lambda ───────────────────────
+      # Lambda receives the versioned ROOT path so it can find both
+      # /migration and /rollback subfolders.
       - name: Run Migration
         run: |
+          echo "Invoking Lambda to run migration for version ${{ env.PROJECT_VERSION }}..."
           aws lambda invoke \
             --function-name ${{ secrets.LAMBDA_FUNCTION_NAME }} \
             --payload "{\"dbSelector\": \"aws-prod\", \"action\": \"migrate\", \"migrationLocation\": \"s3://${{ secrets.S3_MIGRATION_BUCKET }}/${{ env.PROJECT_VERSION }}/\"}" \
             --cli-binary-format raw-in-base64-out \
             response.json
+
+          echo "--- Lambda Response ---"
           cat response.json
+
+          # Fail the pipeline if migration was not successful
+          SUCCESS=$(jq -r '.result.success // .success // "false"' response.json)
+          if [ "$SUCCESS" != "true" ]; then
+            echo "Migration FAILED. See response above."
+            exit 1
+          fi
+          echo "Migration completed successfully."
